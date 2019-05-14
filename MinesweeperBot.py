@@ -26,6 +26,7 @@ debug_move_queue = list()
 done = False
 
 
+"""Gets location information about Minesweeper"""
 def callback(hwnd, extra):
     rect = win32gui.GetWindowRect(hwnd)
     x = rect[0]
@@ -45,6 +46,7 @@ def cleanup():
     # os.system('TASKKILL /F /IM "Minesweeper X.exe"')
 
 
+"""given a tuple of length 2, will left click at the given position in pixels"""
 def l_click(pos):
     y = pos[1] + box[1]
     x = pos[0] + box[0]
@@ -53,6 +55,7 @@ def l_click(pos):
     win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, x, y, 0, 0)
 
 
+"""given a tuple of length 2, will right click at the given position in pixels"""
 def r_click(pos):
     y = pos[1] + box[1]
     x = pos[0] + box[0]
@@ -61,6 +64,7 @@ def r_click(pos):
     win32api.mouse_event(win32con.MOUSEEVENTF_RIGHTUP, x, y, 0, 0)
 
 
+"""takes a screenshot of the board and crops it, saving it to Board.PNG"""
 def screenshot_board():
     # win32api.SetCursorPos((0, 0))
     ig.grab().save("Screenshot.png", "PNG")
@@ -70,13 +74,18 @@ def screenshot_board():
     os.remove("Screenshot.png")
 
 
+"""
+initializes the data model of the board state
+
+"""
 def init_data_model(loc):
-    y = loc[0]
-    x = loc[1]
-    positions = list(zip(x.tolist(), y.tolist()))
+    # convert data from open CV to list of x,y pixel coordinate pairs
+    positions = list(zip(loc[1].tolist(), loc[0].tolist()))
+    # pickout the first y value
     yval = positions[0][1]
     overall_list = list()
     line_list = list()
+    # split out data into rows
     for i in positions:
         if i[1] == yval:
             line_list.append((i[0], i[1]))
@@ -88,11 +97,11 @@ def init_data_model(loc):
             yval = i[1]
             line_list.append((i[0], i[1]))
     overall_list.append(line_list)
-
+    print(overall_list)
     global coordinates
     coordinates = overall_list
     global board_model
-    board_model = [["?" for _ in row] for row in overall_list]
+    board_model = [["_" for _ in row] for row in overall_list]
     global coord_board_map
     for i in range(0, len(coordinates[0])):
         for j in range(0, len(coordinates)):
@@ -107,32 +116,27 @@ def init_data_model(loc):
 
 
 def read_info_from_board():
+    for i, row in enumerate(board_model):
+        for j, cell in enumerate(row):
+            if board_model[i][j] == '?':
+                board_model[i][j] = '_'
+
     screenshot_board()
-    template = cv2.imread("minesweeper_tile.png")
+    template = cv2.imread("minesweeper_blank_tile.png")
     board = cv2.imread("Board.png")
+    #determine cell size
     w, h = template.shape[:-1]
     global cell_size
     cell_size = (w, h)
     result = cv2.matchTemplate(board, template, cv2.TM_CCOEFF_NORMED)
-    threshold = .8
+    threshold = .95
     loc = np.where(result > threshold)
+    # init board model with data from openCV if there is no model
     if len(board_model) == 0:
         init_data_model(loc)
 
     for pt in zip(*loc[::-1]):
-        cv2.rectangle(board, pt, (pt[0] + w, pt[1] + h), (0, 0, 255), 2)
-
-    cv2.imwrite("result.png", board)
-
-    template = cv2.imread("minesweeper_blank_tile.png")
-    board = cv2.imread("Board.png")
-    w, h = template.shape[:-1]
-    result = cv2.matchTemplate(board, template, cv2.TM_CCOEFF_NORMED)
-    threshold = .95
-    loc = np.where(result > threshold)
-
-    for pt in zip(*loc[::-1]):
-        board_model[coord_board_map[(pt[0], pt[1])][0]][coord_board_map[(pt[0], pt[1])][1]] = ' '
+        board_model[coord_board_map[(pt[0], pt[1])][0]][coord_board_map[(pt[0], pt[1])][1]] = '?'
         cv2.rectangle(board, pt, (pt[0] + w, pt[1] + h), (0, 0, 255), 2)
 
     cv2.imwrite("result0.png", board)
@@ -177,6 +181,19 @@ def read_info_from_board():
 
     cv2.imwrite("result_win.png", board)
 
+    template = cv2.imread("minesweeper_lose.png")
+    board = cv2.imread("Board.png")
+    w, h = template.shape[:-1]
+    result = cv2.matchTemplate(board, template, cv2.TM_CCOEFF_NORMED)
+    threshold = .95
+    loc = np.where(result > threshold)
+
+    for pt in zip(*loc[::-1]):
+        done = True
+        cv2.rectangle(board, pt, (pt[0] + w, pt[1] + h), (0, 0, 255), 2)
+
+    cv2.imwrite("result_lose.png", board)
+
 
 def cell_location(x, y):
     global cell_size
@@ -189,7 +206,7 @@ def add_to_move_queue():
     for i, row in enumerate(board_model):
         for j, cell in enumerate(row):
             if type(cell) is int:
-                adj = adjacent_to_cell(i , j)
+                adj = adjacent_to_cell(i, j)
                 if count(adj, '?') + count(adj, 'flag') == board_model[i][j]:
                     for entry in adj:
                         if entry[2] == '?':
@@ -230,7 +247,7 @@ def adjacent_to_cell(x, y):
 
 
 def process_move_queue():
-    if len(move_queue) == 0 and len(board_model) > 0:
+    if len(move_queue) == 0 and len(board_model) > 0 and not done:
         get_random_blank()
     else:
         for move in move_queue:
@@ -253,9 +270,13 @@ def get_random_blank():
                 selected = True
 
 def main():
+    # kills existing minesweepers
     os.system('TASKKILL /F /IM "Minesweeper X.exe"')
+    # opens minesweeper
     subprocess.Popen(r"MinesweeperX__1.15\Minesweeper X.exe")
+    # delay to let it load
     time.sleep(.5)
+    # look for Minesweeper
     win32gui.EnumWindows(callback, None)
 
     # gather board size, initialize models
@@ -266,9 +287,9 @@ def main():
     time.sleep(2)
 
     while not done:
-        process_move_queue()
         read_info_from_board()
         add_to_move_queue()
+        process_move_queue()
 
 
 
