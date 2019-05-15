@@ -3,6 +3,8 @@ import time
 import PIL.Image as image
 import PIL.ImageGrab as ig
 import atexit
+from itertools import combinations
+import math
 
 import win32gui
 import win32api
@@ -24,6 +26,8 @@ Y = 0
 move_queue = list()
 debug_move_queue = list()
 done = False
+large_number_value = 2
+iteration = 0
 
 
 """Gets location information about Minesweeper"""
@@ -71,7 +75,7 @@ def screenshot_board():
     im = image.open('Screenshot.png')
     minesweeper_board = im.crop(box)
     minesweeper_board.save("Board.png")
-    os.remove("Screenshot.png")
+    # os.remove("Screenshot.png")
 
 
 """
@@ -111,8 +115,8 @@ def init_data_model(loc):
     global Y
     X = len(coordinates[0])
     Y = len(coordinates)
-    print("X : " + str(X))
-    print("Y : " + str(Y))
+    print("Width in Mines: " + str(X))
+    print("Height in Mines : " + str(Y))
 
 
 def read_info_from_board():
@@ -124,13 +128,17 @@ def read_info_from_board():
     screenshot_board()
     template = cv2.imread("minesweeper_blank_tile.png")
     board = cv2.imread("Board.png")
-    #determine cell size
+    # determine cell size
     w, h = template.shape[:-1]
     global cell_size
     cell_size = (w, h)
     result = cv2.matchTemplate(board, template, cv2.TM_CCOEFF_NORMED)
     threshold = .95
     loc = np.where(result > threshold)
+    for pt in zip(*loc[::-1]):
+        cv2.rectangle(board, pt, (pt[0] + w, pt[1] + h), (0, 0, 255), 2)
+
+    cv2.imwrite("result.png", board)
     # init board model with data from openCV if there is no model
     if len(board_model) == 0:
         init_data_model(loc)
@@ -142,17 +150,19 @@ def read_info_from_board():
     cv2.imwrite("result0.png", board)
 
     for file in os.listdir('digits'):
-        small_image = cv2.imread('digits/' + file)
-        large_image = cv2.imread("Board.png")
-        w, h = small_image.shape[:-1]
-        result = cv2.matchTemplate(large_image, small_image, cv2.TM_CCOEFF_NORMED)
-        threshold = .8
-        loc = np.where(result > threshold)
-        for pt in zip(*loc[::-1]):
-            board_model[coord_board_map[(pt[0]-1, pt[1]-1)][0]][coord_board_map[(pt[0]-1, pt[1]-1)][1]] = int(file[12])
-            cv2.rectangle(large_image, pt, (pt[0] + w, pt[1] + h), (0, 0, 255), 2)
+        if int(file[12]) < large_number_value:
+            print(f"Recognizing: {file[12]} ")
+            small_image = cv2.imread('digits/' + file)
+            large_image = cv2.imread("Board.png")
+            w, h = small_image.shape[:-1]
+            result = cv2.matchTemplate(large_image, small_image, cv2.TM_CCOEFF_NORMED)
+            threshold = .8
+            loc = np.where(result > threshold)
+            for pt in zip(*loc[::-1]):
+                board_model[coord_board_map[(pt[0]-1, pt[1]-1)][0]][coord_board_map[(pt[0]-1, pt[1]-1)][1]] = int(file[12])
+                cv2.rectangle(large_image, pt, (pt[0] + w, pt[1] + h), (0, 0, 255), 2)
 
-        cv2.imwrite("result" + file[12] + ".png", large_image)
+            cv2.imwrite("result" + file[12] + ".png", large_image)
 
     template = cv2.imread("minesweeper_flag.png")
     board = cv2.imread("Board.png")
@@ -215,7 +225,7 @@ def add_to_move_queue():
                             if (pos[0] + cell_size[0] // 2, pos[1] + cell_size[1] // 2, r_click) not in move_queue:
                                 move_queue.append((pos[0] + cell_size[0] // 2, pos[1] + cell_size[1] // 2, r_click))
                                 debug_move_queue.append((entry[0], entry[1], r_click))
-                if count(adj, 'flag') == board_model[i][j] and count(adj, '?') > 0:
+                elif count(adj, 'flag') == board_model[i][j] and count(adj, '?') > 0:
                     for entry in adj:
                         if entry[2] == '?':
                             pos = board_coord_map[(entry[0], entry[1])]
@@ -223,7 +233,31 @@ def add_to_move_queue():
                             if (pos[0] + cell_size[0] // 2, pos[1] + cell_size[1] // 2, l_click) not in move_queue:
                                 move_queue.append((pos[0] + cell_size[0] // 2, pos[1] + cell_size[1] // 2, l_click))
                                 debug_move_queue.append((entry[0], entry[1], r_click))
-
+                elif board_model[i][j] - count(adj, 'flag') == 1 and count(adj, '?') == 3 and wall_of_blanks_direction(adj):
+                    direction = wall_of_blanks_direction(adj)
+                    neighbors = wall_of_blanks_neighbors(adj, direction)
+                    for neighbor in neighbors:
+                        if isinstance(neighbor[2], int):
+                            adj_neighbor = adjacent_to_cell(neighbor[0], neighbor[1])
+                            if count(adj_neighbor, '?') == 3 and wall_of_blanks_direction(adj_neighbor) == direction:
+                                if board_model[neighbor[0]][neighbor[1]] - count(adj_neighbor, 'flag') == 2:
+                                    direction_prime = (i - neighbor[0], j - neighbor[1])
+                                    l_click_target = (i + direction[0] + direction_prime[0], j + direction[1] + direction_prime[1])
+                                    l_click_location = board_coord_map[l_click_target[0], l_click_target[1]]
+                                    current_target = (board_coord_map[(i, j)][0] + box[0] + cell_size[0] // 2, board_coord_map[(i, j)][1] + box[1] + cell_size[1] // 2)
+                                    win32api.SetCursorPos(current_target)
+                                    current_target = (board_coord_map[(neighbor[0], neighbor[1])][0] + box[0] + cell_size[0] // 2,
+                                                      board_coord_map[(neighbor[0], neighbor[1])][1] + box[1] + cell_size[1] // 2)
+                                    win32api.SetCursorPos(current_target)
+                                    mouse_target = (l_click_location[0] + box[0] + cell_size[0] // 2, l_click_location[1] + box[1] + cell_size[1] // 2)
+                                    win32api.SetCursorPos(mouse_target)
+                                    move_queue.append((l_click_location[0] + cell_size[0] // 2, l_click_location[1] + cell_size[1] // 2, l_click))
+                                    r_click_target = (neighbor[0] + direction[0] - direction_prime[0], neighbor[1] + direction[1] - direction_prime[1])
+                                    r_click_location = board_coord_map[r_click_target[0], r_click_target[1]]
+                                    mouse_target = (r_click_location[0] + box[0] + cell_size[0] // 2, r_click_location[1] + box[1] + cell_size[1] // 2)
+                                    win32api.SetCursorPos(mouse_target)
+                                    move_queue.append((r_click_location[0] + cell_size[0] // 2, r_click_location[1] + cell_size[1] // 2, r_click))
+                                    print(f"2-1 target added: {l_click_target} based on {i, j, cell} and {neighbor}")
 
 def count(adj, value):
     count = 0
@@ -246,10 +280,40 @@ def adjacent_to_cell(x, y):
     return cells
 
 
-def process_move_queue():
-    if len(move_queue) == 0 and len(board_model) > 0 and not done:
-        get_random_blank()
+def wall_of_blanks_direction(adj):
+    if len(adj) < 8:
+        return None
+    combos = [(adj[0], adj[1], adj[2]), (adj[5], adj[6], adj[7]), (adj[0], adj[3], adj[5]), (adj[2], adj[4], adj[7])]
+    directions = {0: (-1, 0), 1: (1, 0), 2: (0, -1), 3: (0, 1)}
+    for combo in combos:
+        if all([data[2] == '?' for data in combo]):
+            return directions[combos.index(combo)]
+    return None
+
+def wall_of_blanks_neighbors(adj, direction):
+    if direction == (1, 0) or direction == (-1, 0):
+        return (adj[3], adj[4])
+    elif direction == (0, 1) or direction == (0, -1):
+        return (adj[1], adj[6])
     else:
+        raise Exception(f"Invalid direction: {direction}")
+
+
+def process_move_queue():
+    global iteration
+    global done
+    global large_number_value
+    iteration += 1
+    if len(move_queue) == 0 and len(board_model) > 0 and not done:
+        if iteration < 20:
+            print("No more definitive moves found, switching to random Guessing")
+            get_random_blank()
+        elif large_number_value < 8:
+            large_number_value += 1
+        else:
+            done = True
+    else:
+        print(f"Processing Move Queue: Queue size = {len(move_queue)}")
         for move in move_queue:
             move[2]((move[0], move[1]))
             time.sleep(.02)
@@ -261,11 +325,11 @@ def get_random_blank():
     while not selected:
         rX = random.randint(0, X-1)
         rY = random.randint(0, Y-1)
-        print(rX, rY)
         if board_model[rY][rX] == '?':
             pos = board_coord_map[(rY, rX)]
             # print(pos)
             if (pos[0] + cell_size[0] // 2, pos[1] + cell_size[1] // 2, l_click) not in move_queue:
+                print(f"Random Blank selected: {(rX, rY)}")
                 move_queue.append((pos[0] + cell_size[0] // 2, pos[1] + cell_size[1] // 2, l_click))
                 selected = True
 
@@ -284,7 +348,7 @@ def main():
 
     #click in the middle
     l_click(cell_location(Y//2 - 1, X//2 - 1))
-    time.sleep(2)
+    time.sleep(.5)
 
     while not done:
         read_info_from_board()
